@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - '*'
+  push:
+    branches:
+      - 'master'
+
+jobs:
+  build:
+    name: build
+    runs-on: ubuntu-16.04
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Build env file
+      run: |
+        export CIRCLE_BRANCH="${GITHUB_REF##*/}"
+        make version
+        if [[ "$CIRCLE_BRANCH" == "release" ]]; then
+          export PACKAGECLOUD_REPOSITORY=dokku/dokku
+          make .env.docker
+        fi
+    - name: Prepare build env
+      run: CIRCLE_BRANCH="${GITHUB_REF##*/}" make circleci
+    - name: Create build image
+      run: CIRCLE_BRANCH="${GITHUB_REF##*/}" make build-docker-image
+    - name: Build binary
+      run: |
+        export CIRCLE_BRANCH="${GITHUB_REF##*/}"
+        make build-in-docker
+    - name: Run tests
+      run: |
+        make validate-in-docker
+    - name: Run version test
+      run: |
+        echo "=====> Copy binary"
+        sudo cp build/linux/plugn /usr/local/bin/plugn
+        echo "=====> Execute binary"
+        export DEBUG=1
+        plugn version
+        echo "=====> bashenv files"
+        sudo ls -lah /tmp/*bashenv*
+
+        first=$(ls -t /tmp/*bashenv* | head -n 1)
+        echo "=====> bashenv $first file contents"
+        sudo cat "$first"
+        sudo rm -rf /tmp/*bashenv*
+    - name: Run version test (sudo)
+      run: |
+        echo "=====> Copy binary"
+        sudo cp build/linux/plugn /usr/local/bin/plugn
+        echo "=====> Create user"
+        sudo useradd -m -s /bin/bash user
+        echo "=====> Execute binary"
+        export DEBUG=1
+        sudo -u user -E -H plugn version
+        echo "=====> bashenv files"
+        sudo ls -lah /tmp/*bashenv*
+
+        first=$(ls -t /tmp/*bashenv* | head -n 1)
+        echo "=====> bashenv $first file contents"
+        sudo cat "$first"
+        sudo rm -rf /tmp/*bashenv*
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v2
+      with:
+        name: build
+        path: build
+    - name: Release artifacts
+      run: |
+        export CIRCLE_BRANCH="${GITHUB_REF##*/}"
+        if [[ "$CIRCLE_BRANCH" == "release" ]]; then
+          make release-in-docker release-packagecloud-in-docker
+        fi
